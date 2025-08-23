@@ -6,9 +6,10 @@ import SearchFilters, { SearchFilters as SearchFiltersType } from './SearchFilte
 interface EnhancedSearchBarProps {
   onSearch: (query: string, filters: SearchFiltersType) => void;
   onClearSearch: () => void;
+  hideFilters?: boolean; // New prop to hide filters when they're in sidebar
 }
 
-const EnhancedSearchBar: React.FC<EnhancedSearchBarProps> = ({ onSearch, onClearSearch }) => {
+const EnhancedSearchBar: React.FC<EnhancedSearchBarProps> = ({ onSearch, onClearSearch, hideFilters = false }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filters, setFilters] = useState<SearchFiltersType>({
     skills: [],
@@ -144,18 +145,21 @@ const EnhancedSearchBar: React.FC<EnhancedSearchBarProps> = ({ onSearch, onClear
             Search
           </button>
           
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className={`px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              showFilters 
-                ? 'bg-blue-50 border-blue-300 text-blue-700' 
-                : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-            }`}
-          >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.414A1 1 0 013 6.707V4z" />
-            </svg>
-          </button>
+          {/* Only show filters toggle if filters are not hidden */}
+          {!hideFilters && (
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                showFilters 
+                  ? 'bg-blue-50 border-blue-300 text-blue-700' 
+                  : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.414A1 1 0 013 6.707V4z" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {/* Search History Dropdown */}
@@ -196,8 +200,8 @@ const EnhancedSearchBar: React.FC<EnhancedSearchBarProps> = ({ onSearch, onClear
         ))}
       </div>
 
-      {/* Advanced Filters */}
-      {showFilters && (
+      {/* Advanced Filters - Only show if not hidden and expanded */}
+      {!hideFilters && showFilters && (
         <SearchFilters
           onFiltersChange={handleFiltersChange}
           onClearFilters={() => {
