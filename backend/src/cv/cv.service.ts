@@ -325,6 +325,8 @@ export class CvService {
       }
       const builtFilter = this.buildPineconeFilter(combinedFilters);
       
+      this.logger.debug(`Built Pinecone filter: ${JSON.stringify(builtFilter)}`);
+      
       const queryRequest: any = {
         vector: queryEmbedding,
         topK: 20,
@@ -337,6 +339,11 @@ export class CvService {
       // Primary search
       let searchResponse = await this.pineconeIndex.query(queryRequest);
       let results = (searchResponse.matches || []);
+      
+      this.logger.debug(`Pinecone returned ${results.length} results before post-filtering`);
+      if (results.length > 0) {
+        this.logger.debug(`First result metadata: ${JSON.stringify(results[0].metadata)}`);
+      }
 
       // Apply post-filtering based on query intent
       if (hasSkillTerms) {
@@ -363,6 +370,7 @@ export class CvService {
 
       if (hasLocationTerms) {
         this.logger.debug(`Starting location filtering with ${results.length} results. Query location: "${finalLocationNormalized}"`);
+        this.logger.debug(`Results before location filtering: ${results.map(r => `${r.id}: location="${r.metadata?.location}", normalized="${r.metadata?.locationNormalized}"`).join(', ')}`);
         results = results.filter(match => {
           const loc: string | undefined = match.metadata?.location;
           const locNorm: string | undefined = match.metadata?.locationNormalized;
