@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsArray } from 'class-validator';
+import { IsString, IsOptional, IsArray, IsNumber, IsIn } from 'class-validator';
 
 // DTO for CV metadata extracted from PDF
 export class CvMetadataDto {
@@ -37,22 +37,33 @@ export class CvSearchDto {
   @IsString()
   query: string;
 
-  @IsArray()
-  @IsString({ each: true })
   @IsOptional()
+  @IsArray()
   skills?: string[];
 
-  @IsString()
   @IsOptional()
+  @IsString()
   location?: string;
 
-  @IsNumber()
   @IsOptional()
+  @IsString()
+  education?: string;
+
+  @IsOptional()
+  @IsNumber()
   minExperience?: number;
 
-  @IsNumber()
   @IsOptional()
+  @IsNumber()
   maxExperience?: number;
+
+  @IsOptional()
+  @IsIn(['relevance', 'experience', 'uploadDate'])
+  sortBy?: 'relevance' | 'experience' | 'uploadDate';
+
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc';
 }
 
 // DTO for CV search response

@@ -41,11 +41,11 @@ export default function UploadPage() {
         }
 
       } catch (error) {
-        console.error(`Error uploading ${file.name}:`, error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
         newUploads.push({
           id: `error-${Date.now()}`,
           filename: file.name,
-          message: `Upload failed: ${error.message}`,
+          message: `Upload failed: ${errorMessage}`,
         });
       }
     }

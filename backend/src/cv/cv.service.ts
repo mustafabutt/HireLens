@@ -217,10 +217,10 @@ export class CvService {
     try {
       // Filter out null values from metadata as Pinecone doesn't accept them
       const metadata: any = {
-        filename: cvEntity.filename,
-        fullText: cvEntity.fullText,
-        uploadDate: cvEntity.uploadDate.toISOString(),
-        fileSize: cvEntity.fileSize,
+            filename: cvEntity.filename,
+            fullText: cvEntity.fullText,
+            uploadDate: cvEntity.uploadDate.toISOString(),
+            fileSize: cvEntity.fileSize,
         storedFilePath: cvEntity.filePath,
         storedFilename: path.basename(cvEntity.filePath),
         cvId: cvEntity.id,
@@ -278,25 +278,44 @@ export class CvService {
     try {
       // Generate embedding for the search query
       const queryEmbedding = await this.generateEmbedding(query);
-
+      
       // Extract potential skills and locations from the query
       const extractedSkillIds = this.extractSkillsFromQuery(query);
       const extractedLocation = this.extractLocationFromQuery(query);
       const extractedLocationNormalized = extractedLocation ? this.normalizeLocation(extractedLocation) : null;
       const extractedEducation = this.extractEducationFromQuery(query);
       
+      // Combine extracted terms with explicit filters from frontend
+      const combinedSkillIds = [
+        ...extractedSkillIds,
+        ...(filters?.skills || []).map((s: string) => s.toLowerCase())
+      ];
+      
+      const finalLocation = filters?.location || extractedLocation;
+      const finalLocationNormalized = finalLocation ? this.normalizeLocation(finalLocation) : extractedLocationNormalized;
+      
+      const finalEducation = filters?.education || extractedEducation;
+      
+      // Debug logging
+      this.logger.debug(`Search filters received: ${JSON.stringify(filters)}`);
+      this.logger.debug(`Final location: "${finalLocation}", normalized: "${finalLocationNormalized}"`);
+      this.logger.debug(`Combined skill IDs: ${JSON.stringify(combinedSkillIds)}`);
+      this.logger.debug(`Final education: "${finalEducation}"`);
+      
       // Determine if we should enforce strict filtering based on query content
-      const hasSkillTerms = extractedSkillIds.length > 0;
-      const hasLocationTerms = !!extractedLocationNormalized;
-      const hasEducationTerms = !!extractedEducation;
+      const hasSkillTerms = combinedSkillIds.length > 0;
+      const hasLocationTerms = !!finalLocationNormalized;
+      const hasEducationTerms = !!finalEducation;
       const isGeneralQuery = !hasSkillTerms && !hasLocationTerms && !hasEducationTerms;
 
       // Build Pinecone query with appropriate filters
       const combinedFilters = {
         ...(filters || {}),
-        ...(hasSkillTerms ? { skillIds: extractedSkillIds } : {}),
-        ...(hasLocationTerms ? { locationNormalized: extractedLocationNormalized } : {}),
-        ...(hasEducationTerms ? { education: extractedEducation } : {}),
+        ...(hasSkillTerms ? { skillIds: combinedSkillIds } : {}),
+        ...(hasLocationTerms ? { locationNormalized: finalLocationNormalized } : {}),
+        ...(hasEducationTerms ? { education: finalEducation } : {}),
+        ...(filters?.minExperience && { minExperience: filters.minExperience }),
+        ...(filters?.maxExperience && { maxExperience: filters.maxExperience }),
       };
       const builtFilter = this.buildPineconeFilter(combinedFilters);
       
@@ -325,7 +344,7 @@ export class CvService {
           const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
 
           // Check if ANY of the extracted skills are present
-          return extractedSkillIds.some(skillId => {
+          return combinedSkillIds.some(skillId => {
             const s = skillId.toLowerCase();
             if (normArray.includes(s)) return true;
             if (skillsLower.includes(s)) return true;
@@ -343,7 +362,7 @@ export class CvService {
           const fullText: string | undefined = match.metadata?.fullText;
           const locLower = typeof loc === 'string' ? loc.toLowerCase() : '';
           const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
-          const qLoc = extractedLocationNormalized!.toLowerCase();
+          const qLoc = finalLocationNormalized!.toLowerCase();
           
           this.logger.debug(`Location filtering CV ${match.id}: location="${loc}", normalized="${locNorm}", query location="${qLoc}"`);
           
@@ -367,7 +386,7 @@ export class CvService {
           const fullText: string | undefined = match.metadata?.fullText;
           const eduLower = typeof education === 'string' ? education.toLowerCase() : '';
           const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
-          const qEdu = extractedEducation!.toLowerCase();
+          const qEdu = finalEducation!.toLowerCase();
           
           this.logger.debug(`Education filtering CV ${match.id}: education="${education}", query education="${qEdu}"`);
           
@@ -411,6 +430,32 @@ export class CvService {
         typeof match.score === 'number' ? match.score >= 0.3 : true
       );
 
+      // Apply sorting if specified
+      if (filters?.sortBy && filters.sortBy !== 'relevance') {
+        results.sort((a, b) => {
+          let aValue: any, bValue: any;
+          
+          switch (filters.sortBy) {
+            case 'experience':
+              aValue = a.metadata?.yearsExperience || 0;
+              bValue = b.metadata?.yearsExperience || 0;
+              break;
+            case 'uploadDate':
+              aValue = new Date(a.metadata?.uploadDate || 0);
+              bValue = new Date(b.metadata?.uploadDate || 0);
+              break;
+            default:
+              return 0;
+          }
+          
+          if (filters.sortOrder === 'asc') {
+            return aValue > bValue ? 1 : -1;
+          } else {
+            return aValue < bValue ? 1 : -1;
+          }
+        });
+      }
+
       // If no results and we had strict filtering, try a more lenient search
       if (results.length === 0 && (hasSkillTerms || hasLocationTerms || hasEducationTerms)) {
         this.logger.debug(`No results found with strict filtering, trying fallback search`);
@@ -429,7 +474,7 @@ export class CvService {
             const fullText: string | undefined = match.metadata?.fullText;
             const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
             
-            return extractedSkillIds.some(skillId => {
+            return combinedSkillIds.some(skillId => {
               const s = skillId.toLowerCase();
               if (fullTextLower.includes(s)) return true;
               const skillVariants = this.getSkillVariants(s);
@@ -449,7 +494,7 @@ export class CvService {
             const fullText: string | undefined = match.metadata?.fullText;
             const locLower = typeof loc === 'string' ? loc.toLowerCase() : '';
             const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
-            const qLoc = extractedLocationNormalized!.toLowerCase();
+            const qLoc = finalLocationNormalized!.toLowerCase();
             
             const hasLocation = (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) || 
                                locLower.includes(qLoc) || 
@@ -471,29 +516,9 @@ export class CvService {
             const fullText: string | undefined = match.metadata?.fullText;
             const eduLower = typeof education === 'string' ? education.toLowerCase() : '';
             const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
-            const qEdu = extractedEducation!.toLowerCase();
+            const qEdu = finalEducation!.toLowerCase();
             
-            // More flexible education matching (same logic as primary filtering)
-            let hasEducation = false;
-            
-            // Check if query education appears in stored education
-            if (eduLower.includes(qEdu)) {
-              hasEducation = true;
-            }
-            // Check if query education appears in fullText
-            else if (fullTextLower.includes(qEdu)) {
-              hasEducation = true;
-            }
-            // Check for partial matches
-            else {
-              const queryWords = qEdu.split(/\s+/);
-              const hasPartialMatch = queryWords.some(word => 
-                word.length > 2 && (eduLower.includes(word) || fullTextLower.includes(word))
-              );
-              if (hasPartialMatch) {
-                hasEducation = true;
-              }
-            }
+            const hasEducation = eduLower.includes(qEdu) || fullTextLower.includes(qEdu);
             
             if (!hasEducation) {
               this.logger.debug(`CV ${match.id} filtered out in fallback - no matching education`);

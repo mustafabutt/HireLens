@@ -33,8 +33,11 @@ export class SearchController {
       const results = await this.cvService.searchCvs(searchDto.query, {
         skills: searchDto.skills,
         location: searchDto.location,
+        education: searchDto.education,
         minExperience: searchDto.minExperience,
         maxExperience: searchDto.maxExperience,
+        sortBy: searchDto.sortBy,
+        sortOrder: searchDto.sortOrder,
       });
 
       this.logger.log(`Found ${results.length} matching CVs`);
