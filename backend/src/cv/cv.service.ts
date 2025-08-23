@@ -381,21 +381,31 @@ export class CvService {
           
           this.logger.debug(`Location filtering CV ${match.id}: location="${loc}", normalized="${locNorm}", query location="${qLoc}"`);
           
-          // STRICT location matching - only exact matches allowed
+          // SMART location matching - exact matches OR city name contained in location
           let hasLocation = false;
           
-          // ONLY allow exact matches in location fields - no partial matches
+          // First priority: exact match in locationNormalized field
           if (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) {
             hasLocation = true;
             this.logger.debug(`Exact location match in normalized field: "${qLoc}" === "${locNorm}"`);
           }
+          // Second priority: exact match in location field
           else if (locLower === qLoc) {
             hasLocation = true;
             this.logger.debug(`Exact location match in location field: "${qLoc}" === "${locLower}"`);
           }
-          // NO partial matches, NO fullText fallback - only exact location field matches
+          // Third priority: city name is contained in the location (e.g., "sialkot" in "sialkot, pakistan")
+          else if (typeof locNorm === 'string' && locNorm.toLowerCase().includes(qLoc)) {
+            hasLocation = true;
+            this.logger.debug(`City name "${qLoc}" found in location "${locNorm}"`);
+          }
+          else if (locLower.includes(qLoc)) {
+            hasLocation = true;
+            this.logger.debug(`City name "${qLoc}" found in location "${locLower}"`);
+          }
+          // No match found
           else {
-            this.logger.debug(`Location "${qLoc}" does not exactly match CV location "${loc}" or normalized "${locNorm}"`);
+            this.logger.debug(`Location "${qLoc}" not found in CV location "${loc}" or normalized "${locNorm}"`);
           }
           
           if (hasLocation) {
@@ -526,21 +536,31 @@ export class CvService {
             
             this.logger.debug(`Fallback location filtering CV ${match.id}: location="${loc}", normalized="${locNorm}", query location="${qLoc}"`);
             
-            // STRICT location matching in fallback too - only exact matches allowed
+            // SMART location matching in fallback too - exact matches OR city name contained in location
             let hasLocation = false;
             
-            // ONLY allow exact matches in location fields - no partial matches
+            // First priority: exact match in locationNormalized field
             if (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) {
               hasLocation = true;
               this.logger.debug(`Fallback: Exact location match in normalized field: "${qLoc}" === "${locNorm}"`);
             }
+            // Second priority: exact match in location field
             else if (locLower === qLoc) {
               hasLocation = true;
               this.logger.debug(`Fallback: Exact location match in location field: "${qLoc}" === "${locLower}"`);
             }
-            // NO partial matches, NO fullText fallback - only exact location field matches
+            // Third priority: city name is contained in the location (e.g., "sialkot" in "sialkot, pakistan")
+            else if (typeof locNorm === 'string' && locNorm.toLowerCase().includes(qLoc)) {
+              hasLocation = true;
+              this.logger.debug(`Fallback: City name "${qLoc}" found in location "${locNorm}"`);
+            }
+            else if (locLower.includes(qLoc)) {
+              hasLocation = true;
+              this.logger.debug(`Fallback: City name "${qLoc}" found in location "${locLower}"`);
+            }
+            // No match found
             else {
-              this.logger.debug(`Fallback: Location "${qLoc}" does not exactly match CV location "${loc}" or normalized "${locNorm}"`);
+              this.logger.debug(`Fallback: Location "${qLoc}" not found in CV location "${loc}" or normalized "${locNorm}"`);
             }
             
             if (!hasLocation) {
