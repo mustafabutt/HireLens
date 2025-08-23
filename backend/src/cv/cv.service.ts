@@ -362,6 +362,7 @@ export class CvService {
       }
 
       if (hasLocationTerms) {
+        this.logger.debug(`Starting location filtering with ${results.length} results. Query location: "${finalLocationNormalized}"`);
         results = results.filter(match => {
           const loc: string | undefined = match.metadata?.location;
           const locNorm: string | undefined = match.metadata?.locationNormalized;
@@ -372,35 +373,21 @@ export class CvService {
           
           this.logger.debug(`Location filtering CV ${match.id}: location="${loc}", normalized="${locNorm}", query location="${qLoc}"`);
           
-          // More strict location matching - prioritize exact matches in location fields
+          // STRICT location matching - only exact matches allowed
           let hasLocation = false;
           
-          // First priority: exact match in locationNormalized field
+          // ONLY allow exact matches in location fields - no partial matches
           if (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) {
             hasLocation = true;
             this.logger.debug(`Exact location match in normalized field: "${qLoc}" === "${locNorm}"`);
           }
-          // Second priority: exact match in location field
           else if (locLower === qLoc) {
             hasLocation = true;
             this.logger.debug(`Exact location match in location field: "${qLoc}" === "${locLower}"`);
           }
-          // Third priority: location field contains the query location (but be more careful)
-          else if (locLower.includes(qLoc) && locLower.length <= qLoc.length + 5) {
-            hasLocation = true;
-            this.logger.debug(`Location field contains query location: "${qLoc}" in "${locLower}"`);
-          }
-          // Last resort: check if the location appears prominently in fullText (but be very strict)
-          else if (fullTextLower.includes(qLoc)) {
-            // Only allow if it's not a false positive (e.g., "Lahore" mentioned in a Sialkot CV)
-            // Check if the location appears in a context that suggests it's the candidate's location
-            const locationContext = this.extractLocationContext(fullTextLower, qLoc);
-            if (locationContext.isPrimaryLocation) {
-              hasLocation = true;
-              this.logger.debug(`Location found in fullText context: "${qLoc}" - ${locationContext.context}`);
-            } else {
-              this.logger.debug(`Location "${qLoc}" found in fullText but appears to be secondary/mentioned location`);
-            }
+          // NO partial matches, NO fullText fallback - only exact location field matches
+          else {
+            this.logger.debug(`Location "${qLoc}" does not exactly match CV location "${loc}" or normalized "${locNorm}"`);
           }
           
           if (hasLocation) {
