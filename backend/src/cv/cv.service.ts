@@ -505,6 +505,11 @@ export class CvService {
         const fallbackResponse = await this.pineconeIndex.query(fallbackRequest);
         const fallbackResults = (fallbackResponse.matches || [])
           .filter(match => typeof match.score === 'number' ? match.score >= 0.2 : true);
+        
+        this.logger.debug(`Fallback search returned ${fallbackResults.length} results`);
+        if (fallbackResults.length > 0) {
+          this.logger.debug(`Fallback result metadata: ${JSON.stringify(fallbackResults[0].metadata)}`);
+        }
 
         // Apply softer filtering for fallback, but ALWAYS apply location filtering if location terms exist
         if (hasSkillTerms) {
@@ -574,6 +579,7 @@ export class CvService {
         // IMPORTANT: Always apply education filtering in fallback if education terms exist
         if (hasEducationTerms) {
           this.logger.debug(`Applying education filtering to fallback results`);
+          this.logger.debug(`Education filter criteria: "${finalEducation}"`);
           results = results.filter(match => {
             const education: string | undefined = match.metadata?.education;
             const fullText: string | undefined = match.metadata?.fullText;
@@ -581,10 +587,14 @@ export class CvService {
             const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
             const qEdu = finalEducation!.toLowerCase();
             
+            this.logger.debug(`CV ${match.id} education: "${education}", fullText contains education: ${fullTextLower.includes(qEdu)}`);
+            
             const hasEducation = eduLower.includes(qEdu) || fullTextLower.includes(qEdu);
             
             if (!hasEducation) {
               this.logger.debug(`CV ${match.id} filtered out in fallback - no matching education`);
+            } else {
+              this.logger.debug(`CV ${match.id} passes education filter`);
             }
             
             return hasEducation;
