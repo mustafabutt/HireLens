@@ -524,9 +524,24 @@ export class CvService {
             const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
             const qLoc = finalLocationNormalized!.toLowerCase();
             
-            const hasLocation = (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) || 
-                               locLower.includes(qLoc) || 
-                               fullTextLower.includes(qLoc);
+            this.logger.debug(`Fallback location filtering CV ${match.id}: location="${loc}", normalized="${locNorm}", query location="${qLoc}"`);
+            
+            // STRICT location matching in fallback too - only exact matches allowed
+            let hasLocation = false;
+            
+            // ONLY allow exact matches in location fields - no partial matches
+            if (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) {
+              hasLocation = true;
+              this.logger.debug(`Fallback: Exact location match in normalized field: "${qLoc}" === "${locNorm}"`);
+            }
+            else if (locLower === qLoc) {
+              hasLocation = true;
+              this.logger.debug(`Fallback: Exact location match in location field: "${qLoc}" === "${locLower}"`);
+            }
+            // NO partial matches, NO fullText fallback - only exact location field matches
+            else {
+              this.logger.debug(`Fallback: Location "${qLoc}" does not exactly match CV location "${loc}" or normalized "${locNorm}"`);
+            }
             
             if (!hasLocation) {
               this.logger.debug(`CV ${match.id} filtered out in fallback - no matching location`);
