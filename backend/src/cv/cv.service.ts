@@ -317,6 +317,12 @@ export class CvService {
         ...(filters?.minExperience && { minExperience: filters.minExperience }),
         ...(filters?.maxExperience && { maxExperience: filters.maxExperience }),
       };
+      
+      // Add strict location filtering at Pinecone level if location is specified
+      if (hasLocationTerms && finalLocationNormalized) {
+        combinedFilters.locationNormalized = finalLocationNormalized;
+        this.logger.debug(`Adding strict Pinecone location filter: ${finalLocationNormalized}`);
+      }
       const builtFilter = this.buildPineconeFilter(combinedFilters);
       
       const queryRequest: any = {
@@ -366,9 +372,36 @@ export class CvService {
           
           this.logger.debug(`Location filtering CV ${match.id}: location="${loc}", normalized="${locNorm}", query location="${qLoc}"`);
           
-          const hasLocation = (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) || 
-                             locLower.includes(qLoc) || 
-                             fullTextLower.includes(qLoc);
+          // More strict location matching - prioritize exact matches in location fields
+          let hasLocation = false;
+          
+          // First priority: exact match in locationNormalized field
+          if (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) {
+            hasLocation = true;
+            this.logger.debug(`Exact location match in normalized field: "${qLoc}" === "${locNorm}"`);
+          }
+          // Second priority: exact match in location field
+          else if (locLower === qLoc) {
+            hasLocation = true;
+            this.logger.debug(`Exact location match in location field: "${qLoc}" === "${locLower}"`);
+          }
+          // Third priority: location field contains the query location (but be more careful)
+          else if (locLower.includes(qLoc) && locLower.length <= qLoc.length + 5) {
+            hasLocation = true;
+            this.logger.debug(`Location field contains query location: "${qLoc}" in "${locLower}"`);
+          }
+          // Last resort: check if the location appears prominently in fullText (but be very strict)
+          else if (fullTextLower.includes(qLoc)) {
+            // Only allow if it's not a false positive (e.g., "Lahore" mentioned in a Sialkot CV)
+            // Check if the location appears in a context that suggests it's the candidate's location
+            const locationContext = this.extractLocationContext(fullTextLower, qLoc);
+            if (locationContext.isPrimaryLocation) {
+              hasLocation = true;
+              this.logger.debug(`Location found in fullText context: "${qLoc}" - ${locationContext.context}`);
+            } else {
+              this.logger.debug(`Location "${qLoc}" found in fullText but appears to be secondary/mentioned location`);
+            }
+          }
           
           if (hasLocation) {
             this.logger.debug(`Location "${qLoc}" found in CV ${match.id}`);
@@ -644,6 +677,44 @@ export class CvService {
     }
 
     return null;
+  }
+
+  /**
+   * Extract location context to determine if a location mention is primary or secondary
+   */
+  private extractLocationContext(fullText: string, location: string): { isPrimaryLocation: boolean; context: string } {
+    const locationLower = location.toLowerCase();
+    const textLower = fullText.toLowerCase();
+    
+    // Look for patterns that suggest this is the candidate's primary location
+    const primaryLocationPatterns = [
+      new RegExp(`\\b(based in|located in|from|resident of|address:?|lives in)\\s+${locationLower}\\b`, 'i'),
+      new RegExp(`\\b${locationLower}\\s+(pakistan|city|area|region)\\b`, 'i'),
+      new RegExp(`\\b(contact|phone|email|address).*?${locationLower}`, 'i'),
+    ];
+    
+    // Look for patterns that suggest this is a secondary/mentioned location
+    const secondaryLocationPatterns = [
+      new RegExp(`\\b(worked in|experience in|project in|client in|visited|traveled to)\\s+${locationLower}\\b`, 'i'),
+      new RegExp(`\\b${locationLower}\\s+(office|branch|client|project)`, 'i'),
+    ];
+    
+    // Check for primary location patterns
+    for (const pattern of primaryLocationPatterns) {
+      if (pattern.test(textLower)) {
+        return { isPrimaryLocation: true, context: `Primary location pattern: ${pattern.source}` };
+      }
+    }
+    
+    // Check for secondary location patterns
+    for (const pattern of secondaryLocationPatterns) {
+      if (pattern.test(textLower)) {
+        return { isPrimaryLocation: false, context: `Secondary location pattern: ${pattern.source}` };
+      }
+    }
+    
+    // If no clear patterns, be conservative and assume it's secondary
+    return { isPrimaryLocation: false, context: 'No clear location context pattern found' };
   }
 
   /**
