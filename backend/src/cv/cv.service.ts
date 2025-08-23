@@ -56,6 +56,10 @@ export class CvService {
       // Generate vector embedding
       const embedding = await this.generateEmbedding(fullText);
       
+      // Log total estimated cost for this CV
+      const totalCost = this.estimateTotalCvProcessingCost(fullText.length);
+      this.logger.log(`Total estimated OpenAI cost for CV processing: $${totalCost.toFixed(6)}`);
+      
       // Create CV entity
       const cvEntity: CvEntity = {
         id: cvId,
@@ -135,11 +139,16 @@ export class CvService {
         - Be thorough in extraction - don't miss important details
         
         CV Text:
-        ${text.substring(0, 4000)} // Limit text length for API efficiency
+        ${text.substring(0, 3000)} // Reduced limit for cost efficiency
       `;
 
+      // Log cost estimation for monitoring
+      const textLength = text.substring(0, 3000).length;
+      const estimatedCost = this.estimateChatCompletionCost(textLength);
+      this.logger.debug(`Parsing CV metadata for ${textLength} characters. Estimated cost: $${estimatedCost.toFixed(6)}`);
+
       const completion = await this.openai.chat.completions.create({
-        model: this.configService.get<string>('OPENAI_MODEL') || 'gpt-4',
+        model: this.configService.get<string>('OPENAI_MODEL') || 'gpt-3.5-turbo',
         messages: [
           {
             role: 'system',
@@ -151,6 +160,7 @@ export class CvService {
           },
         ],
         temperature: 0.1, // Low temperature for consistent extraction
+        max_tokens: 1000, // Limit response length for cost control
       });
 
       const responseText = completion.choices[0]?.message?.content;
@@ -194,13 +204,52 @@ export class CvService {
   }
 
   /**
+   * Estimate OpenAI API costs for monitoring
+   */
+  private estimateEmbeddingCost(textLength: number): number {
+    // text-embedding-3-small: $0.00002 per 1K tokens
+    // text-embedding-3-large: $0.00013 per 1K tokens
+    // Rough estimation: 1 character ≈ 0.25 tokens
+    const tokens = textLength * 0.25;
+    const costPer1kTokens = 0.00002; // text-embedding-3-small
+    return (tokens / 1000) * costPer1kTokens;
+  }
+
+  /**
+   * Estimate OpenAI chat completion costs for monitoring
+   */
+  private estimateChatCompletionCost(textLength: number): number {
+    // gpt-3.5-turbo: $0.0005 per 1K input tokens, $0.0015 per 1K output tokens
+    // gpt-4: $0.03 per 1K input tokens, $0.06 per 1K output tokens
+    // Rough estimation: 1 character ≈ 0.25 tokens
+    const inputTokens = textLength * 0.25;
+    const outputTokens = 1000; // max_tokens limit
+    const costPer1kInputTokens = 0.0005; // gpt-3.5-turbo
+    const costPer1kOutputTokens = 0.0015; // gpt-3.5-turbo
+    return (inputTokens / 1000) * costPer1kInputTokens + (outputTokens / 1000) * costPer1kOutputTokens;
+  }
+
+  /**
+   * Estimate total OpenAI costs for CV processing
+   */
+  private estimateTotalCvProcessingCost(textLength: number): number {
+    const chatCompletionCost = this.estimateChatCompletionCost(textLength);
+    const embeddingCost = this.estimateEmbeddingCost(textLength);
+    return chatCompletionCost + embeddingCost;
+  }
+
+  /**
    * Generate vector embedding for CV text using OpenAI
    */
   private async generateEmbedding(text: string): Promise<number[]> {
+    // Log cost estimation for monitoring
+    const textLength = text.substring(0, 6000).length;
+    const estimatedCost = this.estimateEmbeddingCost(textLength);
+    this.logger.debug(`Generating embedding for ${textLength} characters. Estimated cost: $${estimatedCost.toFixed(6)}`);
     try {
       const response = await this.openai.embeddings.create({
-        model: this.configService.get<string>('OPENAI_EMBEDDING_MODEL') || 'text-embedding-3-large',
-        input: text.substring(0, 8000), // Limit text length for embedding
+        model: this.configService.get<string>('OPENAI_EMBEDDING_MODEL') || 'text-embedding-3-small',
+        input: text.substring(0, 6000), // Reduced limit for cost efficiency
       });
 
       return response.data[0].embedding;
