@@ -468,6 +468,7 @@ export class CvService {
       }
 
       if (hasEducationTerms) {
+        this.logger.debug(`Starting education filtering with ${results.length} results. Query education: "${finalEducation}"`);
         results = results.filter(match => {
           const education: string | undefined = match.metadata?.education;
           const fullText: string | undefined = match.metadata?.fullText;
@@ -477,28 +478,42 @@ export class CvService {
           
           this.logger.debug(`Education filtering CV ${match.id}: education="${education}", query education="${qEdu}"`);
           
-          // More flexible education matching
+          // SMART education matching - multiple strategies
           let hasEducation = false;
           
-          // Check if query education appears in stored education
-          if (eduLower.includes(qEdu)) {
+          // Strategy 1: Exact match in education field
+          if (eduLower === qEdu) {
             hasEducation = true;
-            this.logger.debug(`Education match found in education field: "${qEdu}" in "${eduLower}"`);
+            this.logger.debug(`Exact education match: "${qEdu}" === "${eduLower}"`);
           }
-          // Check if query education appears in fullText
+          // Strategy 2: Query education contained in stored education
+          else if (eduLower.includes(qEdu)) {
+            hasEducation = true;
+            this.logger.debug(`Education field contains query: "${qEdu}" in "${eduLower}"`);
+          }
+          // Strategy 3: Stored education contained in query education
+          else if (qEdu.includes(eduLower) && eduLower.length > 5) {
+            hasEducation = true;
+            this.logger.debug(`Query contains education field: "${eduLower}" in "${qEdu}"`);
+          }
+          // Strategy 4: Query education appears in fullText
           else if (fullTextLower.includes(qEdu)) {
             hasEducation = true;
-            this.logger.debug(`Education match found in fullText: "${qEdu}" in fullText`);
+            this.logger.debug(`Education found in fullText: "${qEdu}" in fullText`);
           }
-          // Check for partial matches (e.g., "information technology" in "Bachelor of Science (B.S.) Information Technology")
+          // Strategy 5: Partial word matching (e.g., "information technology" in "Bachelor of Science Information Technology")
           else {
-            const queryWords = qEdu.split(/\s+/);
-            const hasPartialMatch = queryWords.some(word => 
-              word.length > 2 && (eduLower.includes(word) || fullTextLower.includes(word))
+            const queryWords = qEdu.split(/\s+/).filter(word => word.length > 2);
+            const educationWords = eduLower.split(/\s+/).filter(word => word.length > 2);
+            
+            // Check if majority of query words appear in education field
+            const matchingWords = queryWords.filter(word => 
+              educationWords.some(eduWord => eduWord.includes(word) || word.includes(eduWord))
             );
-            if (hasPartialMatch) {
+            
+            if (matchingWords.length >= Math.max(1, queryWords.length * 0.6)) {
               hasEducation = true;
-              this.logger.debug(`Partial education match found: query words "${queryWords}" in education or fullText`);
+              this.logger.debug(`Partial education match: ${matchingWords.length}/${queryWords.length} words matched`);
             }
           }
           
@@ -636,9 +651,45 @@ export class CvService {
             const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
             const qEdu = finalEducation!.toLowerCase();
             
-            this.logger.debug(`CV ${match.id} education: "${education}", fullText contains education: ${fullTextLower.includes(qEdu)}`);
+            this.logger.debug(`Fallback education filtering CV ${match.id}: education="${education}", query education="${qEdu}"`);
             
-            const hasEducation = eduLower.includes(qEdu) || fullTextLower.includes(qEdu);
+            // SMART education matching in fallback too - same strategies as primary filtering
+            let hasEducation = false;
+            
+            // Strategy 1: Exact match in education field
+            if (eduLower === qEdu) {
+              hasEducation = true;
+              this.logger.debug(`Fallback: Exact education match: "${qEdu}" === "${eduLower}"`);
+            }
+            // Strategy 2: Query education contained in stored education
+            else if (eduLower.includes(qEdu)) {
+              hasEducation = true;
+              this.logger.debug(`Fallback: Education field contains query: "${qEdu}" in "${eduLower}"`);
+            }
+            // Strategy 3: Stored education contained in query education
+            else if (qEdu.includes(eduLower) && eduLower.length > 5) {
+              hasEducation = true;
+              this.logger.debug(`Fallback: Query contains education field: "${eduLower}" in "${qEdu}"`);
+            }
+            // Strategy 4: Query education appears in fullText
+            else if (fullTextLower.includes(qEdu)) {
+              hasEducation = true;
+              this.logger.debug(`Fallback: Education found in fullText: "${qEdu}" in fullText`);
+            }
+            // Strategy 5: Partial word matching
+            else {
+              const queryWords = qEdu.split(/\s+/).filter(word => word.length > 2);
+              const educationWords = eduLower.split(/\s+/).filter(word => word.length > 2);
+              
+              const matchingWords = queryWords.filter(word => 
+                educationWords.some(eduWord => eduWord.includes(word) || word.includes(eduWord))
+              );
+              
+              if (matchingWords.length >= Math.max(1, queryWords.length * 0.6)) {
+                hasEducation = true;
+                this.logger.debug(`Fallback: Partial education match: ${matchingWords.length}/${queryWords.length} words matched`);
+              }
+            }
             
             if (!hasEducation) {
               this.logger.debug(`CV ${match.id} filtered out in fallback - no matching education`);
@@ -696,10 +747,8 @@ export class CvService {
       filter.locationNormalized = { $eq: filters.locationNormalized };
     }
 
-    // Add education filter if specified
-    if (filters.education) {
-      filter.education = { $eq: filters.education };
-    }
+    // Note: Education filtering is handled in post-processing for better flexibility
+    // Pinecone filter is too strict for education matching
 
     // Add experience range filter if specified
     if (filters.minExperience || filters.maxExperience) {
