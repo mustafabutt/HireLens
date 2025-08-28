@@ -1550,7 +1550,7 @@ export class CvService {
     return path.join(dataDir, 'cv-filemap.json');
   }
 
-  private async saveFileMapping(id: string, filePath: string): Promise<void> {
+  public async saveFileMapping(id: string, filePath: string): Promise<void> {
     try {
       const fsPromises = fs.promises;
       const mapPath = this.mappingFilePath;
