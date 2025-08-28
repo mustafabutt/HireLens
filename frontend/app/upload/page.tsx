@@ -56,7 +56,7 @@ export default function UploadPage() {
         const formData = new FormData();
         formData.append('cv', file);
 
-        const response = await fetch('/api/upload', {
+        const response = await fetch('/api/upload/cv', {
           method: 'POST',
           body: formData,
         });
