@@ -703,7 +703,7 @@ export class CvService {
       }
 
       // Format results
-      return results.map(match => {
+      const formattedResults = results.map(match => {
         const metadata: any = {};
         if (match.metadata?.fullName) metadata.fullName = match.metadata.fullName;
         if (match.metadata?.email) metadata.email = match.metadata.email;
@@ -724,6 +724,16 @@ export class CvService {
           education: match.metadata?.education,
         };
       });
+
+      // Remove duplicates based on CV ID
+      const uniqueResults = formattedResults.filter((result, index, self) => 
+        index === self.findIndex(r => r.id === result.id)
+      );
+
+      this.logger.debug(`Removed ${formattedResults.length - uniqueResults.length} duplicate results`);
+      this.logger.debug(`Final results count: ${uniqueResults.length}`);
+
+      return uniqueResults;
 
     } catch (error) {
       this.logger.error('Error searching CVs:', error);
