@@ -12,6 +12,7 @@ import {
 import { Response } from 'express';
 import { CvService } from './cv.service';
 import { CvSearchDto, CvSearchResultDto } from './dto/cv.dto';
+import * as https from 'https';
 
 @Controller('cv')
 export class CvController {
@@ -52,35 +53,33 @@ export class CvController {
     try {
       this.logger.log(`Downloading CV with ID: ${id}`);
 
-      // Get the file path for the CV from Pinecone metadata; fallbacks to local map and legacy path
+      // Try metadata URL from index or local map
       let filePath = await this.cvService.getCvFilePathFromIndex(id);
-      if (!filePath) {
-        filePath = await this.cvService.getFilePathFromLocalMap(id);
-      }
-      if (!filePath) {
-        filePath = this.cvService.getCvFilePath(id);
-      }
-      
-      // Check if file exists
-      const fs = require('fs');
-      if (!fs.existsSync(filePath)) {
-        throw new BadRequestException('CV file not found');
-      }
+      if (!filePath) filePath = await this.cvService.getFilePathFromLocalMap(id);
+      if (!filePath) filePath = this.cvService.getCvFilePath(id);
 
-      // Set response headers for file download
+      if (!filePath) throw new BadRequestException('CV file not found');
+
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="cv-${id}.pdf"`);
-      
-      // Stream the file to the response
+
+      if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        https.get(filePath, (stream) => {
+          stream.pipe(res);
+        }).on('error', (e) => {
+          this.logger.error('Error streaming from URL:', e);
+          res.status(HttpStatus.BAD_REQUEST).json({ error: 'Failed to download CV', message: e.message });
+        });
+        return;
+      }
+
+      const fs = require('fs');
+      if (!fs.existsSync(filePath)) throw new BadRequestException('CV file not found');
       const fileStream = fs.createReadStream(filePath);
       fileStream.pipe(res);
-
     } catch (error) {
       this.logger.error(`Error downloading CV ${id}:`, error);
-      res.status(HttpStatus.BAD_REQUEST).json({
-        error: 'Failed to download CV',
-        message: error.message,
-      });
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'Failed to download CV', message: (error as any).message });
     }
   }
 

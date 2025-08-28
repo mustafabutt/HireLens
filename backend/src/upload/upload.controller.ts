@@ -9,23 +9,19 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import * as multer from 'multer';
-import { extname, join } from 'path';
+import { extname } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { CvService } from '../cv/cv.service';
 import { CvUploadResponseDto } from '../cv/dto/cv.dto';
+import { getSupabaseAdmin } from '../lib/supabase';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
-// Configure multer
-const storage = multer.diskStorage({
-  destination: './uploads',
-  filename: (req, file, cb) => {
-    // Generate unique filename with original extension
-    const uniqueName = `${uuidv4()}${extname(file.originalname)}`;
-    cb(null, uniqueName);
-  },
-});
+// Use memory storage; we'll stream to Supabase Storage
+const storage = multer.memoryStorage();
 
 const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  // Only allow PDF files
   if (file.mimetype !== 'application/pdf') {
     cb(new BadRequestException('Only PDF files are allowed'));
     return;
@@ -36,9 +32,7 @@ const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilt
 const upload = multer({
   storage,
   fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-  },
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
 
 @Controller('upload')
@@ -47,17 +41,12 @@ export class UploadController {
 
   constructor(private readonly cvService: CvService) {}
 
-  /**
-   * Upload a single CV file
-   * This endpoint processes one PDF file at a time
-   */
   @Post('cv')
   async uploadSingleCv(
     @Req() req: Request,
     @Res() res: Response,
     @Body('description') description?: string,
   ): Promise<void> {
-    // Use multer middleware
     upload.single('file')(req, res, async (err) => {
       if (err) {
         this.logger.error('Multer error:', err);
@@ -67,7 +56,6 @@ export class UploadController {
 
       try {
         const file = req.file as Express.Multer.File;
-        
         if (!file) {
           res.status(400).json({ error: 'No file uploaded' });
           return;
@@ -75,10 +63,35 @@ export class UploadController {
 
         this.logger.log(`Processing single CV upload: ${file.originalname}`);
 
-        // Process the CV file
-        const cvEntity = await this.cvService.processCv(file.path, file.originalname);
+        // 1) Save buffer to a temp file for local PDF parsing
+        const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cv-'));
+        const tempName = `${uuidv4()}${extname(file.originalname)}`;
+        const tempPath = path.join(tempDir, tempName);
+        await fs.promises.writeFile(tempPath, file.buffer);
 
-        this.logger.log(`Successfully processed CV: ${file.originalname}`);
+        // 2) Process CV (extract text, embed, index)
+        const cvEntity = await this.cvService.processCv(tempPath, file.originalname);
+
+        // 3) Upload original PDF to Supabase Storage
+        const supabase = getSupabaseAdmin();
+        const bucket = 'cvs';
+        const objectPath = `${cvEntity.id}/${tempName}`;
+        const { error: upErr } = await supabase.storage.from(bucket).upload(objectPath, file.buffer, {
+          contentType: 'application/pdf',
+          upsert: true,
+        });
+        if (upErr) {
+          this.logger.error('Supabase upload error:', upErr);
+        }
+        // 4) Get public URL
+        const { data: pub } = supabase.storage.from(bucket).getPublicUrl(objectPath);
+        const publicUrl = pub?.publicUrl;
+
+        // 5) Persist mapping/public URL in index metadata (if supported) and local map fallback
+        if (publicUrl) {
+          await this.cvService.updateStoredFileUrl(cvEntity.id, publicUrl);
+        }
+        await this.cvService.saveFileMapping(cvEntity.id, publicUrl || tempPath);
 
         const response: CvUploadResponseDto = {
           id: cvEntity.id,
@@ -88,56 +101,59 @@ export class UploadController {
         };
 
         res.json(response);
-
       } catch (error) {
         this.logger.error(`Error uploading CV:`, error);
-        res.status(400).json({ error: 'Failed to upload CV', message: error.message });
+        res.status(400).json({ error: 'Failed to upload CV', message: (error as any).message });
       }
     });
   }
 
-  /**
-   * Upload multiple CV files at once
-   * This endpoint processes multiple PDF files in bulk
-   */
   @Post('cv/bulk')
   async uploadBulkCvs(
     @Req() req: Request,
     @Res() res: Response,
     @Body('description') description?: string,
   ): Promise<void> {
-    // Use multer middleware for multiple files
     upload.array('files', 10)(req, res, async (err) => {
       if (err) {
         this.logger.error('Multer error:', err);
         res.status(400).json({ error: 'File upload failed', message: err.message });
         return;
       }
-
       try {
         const files = req.files as Express.Multer.File[];
-
         if (!files || files.length === 0) {
           res.status(400).json({ error: 'No files uploaded' });
           return;
         }
-
         if (files.length > 10) {
           res.status(400).json({ error: 'Maximum 10 files allowed per upload' });
           return;
         }
 
-        this.logger.log(`Processing bulk CV upload: ${files.length} files`);
-
+        const supabase = getSupabaseAdmin();
+        const bucket = 'cvs';
         const results: CvUploadResponseDto[] = [];
 
-        // Process each file sequentially to avoid overwhelming the AI services
         for (const file of files) {
           try {
-            this.logger.log(`Processing CV: ${file.originalname}`);
-            
-            // Process the CV file
-            const cvEntity = await this.cvService.processCv(file.path, file.originalname);
+            const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cv-'));
+            const tempName = `${uuidv4()}${extname(file.originalname)}`;
+            const tempPath = path.join(tempDir, tempName);
+            await fs.promises.writeFile(tempPath, file.buffer);
+
+            const cvEntity = await this.cvService.processCv(tempPath, file.originalname);
+
+            const objectPath = `${cvEntity.id}/${tempName}`;
+            const { error: upErr } = await supabase.storage.from(bucket).upload(objectPath, file.buffer, {
+              contentType: 'application/pdf',
+              upsert: true,
+            });
+            if (upErr) this.logger.error('Supabase upload error:', upErr);
+            const { data: pub } = supabase.storage.from(bucket).getPublicUrl(objectPath);
+            const publicUrl = pub?.publicUrl;
+            if (publicUrl) await this.cvService.updateStoredFileUrl(cvEntity.id, publicUrl);
+            await this.cvService.saveFileMapping(cvEntity.id, publicUrl || tempPath);
 
             results.push({
               id: cvEntity.id,
@@ -145,39 +161,22 @@ export class UploadController {
               message: 'CV uploaded and processed successfully',
               metadata: cvEntity.metadata,
             });
-
-            this.logger.log(`Successfully processed CV: ${file.originalname}`);
-
-          } catch (fileError) {
+          } catch (fileError: any) {
             this.logger.error(`Error processing CV ${file.originalname}:`, fileError);
-            
-            // Add error result but continue processing other files
-            results.push({
-              id: uuidv4(),
-              filename: file.originalname,
-              message: `Failed to process CV: ${fileError.message}`,
-            });
+            results.push({ id: uuidv4(), filename: file.originalname, message: `Failed to process CV: ${fileError.message}` });
           }
         }
 
-        this.logger.log(`Bulk upload completed. Processed: ${results.length} files`);
         res.json(results);
-
-      } catch (error) {
+      } catch (error: any) {
         this.logger.error('Error in bulk CV upload:', error);
         res.status(400).json({ error: 'Failed to process bulk upload', message: error.message });
       }
     });
   }
 
-  /**
-   * Health check endpoint for upload service
-   */
   @Post('health')
   async healthCheck(): Promise<{ status: string; timestamp: string }> {
-    return {
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-    };
+    return { status: 'healthy', timestamp: new Date().toISOString() };
   }
 } 

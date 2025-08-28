@@ -1531,6 +1531,17 @@ export class CvService {
     }
   }
 
+  async updateStoredFileUrl(id: string, url: string): Promise<void> {
+    try {
+      await this.pineconeIndex.update({
+        id,
+        setMetadata: { storedFileUrl: url },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to update storedFileUrl in index for ${id}: ${String(err)}`);
+    }
+  }
+
   /**
    * Persist and retrieve a simple local JSON mapping to avoid relying solely on Pinecone
    */
