@@ -1,230 +1,96 @@
-# CV Search - AI-Powered HR Tool
+# HireLens — AI-Powered CV Search
 
-A complete RAG-based AI tool for HR teams to search and filter CVs using natural language queries.
+This repo contains a NestJS backend and a Next.js (App Router) frontend for semantic CV search powered by Pinecone and OpenAI. The frontend now includes a landing page, Google OAuth via NextAuth, and a minimal persistence endpoint to store user emails in Supabase.
 
-## Features
+## Monorepo Layout
 
-- **Bulk CV Upload**: Upload multiple PDF CVs at once
-- **AI-Powered Parsing**: Automatically extract candidate information using OpenAI
-- **Vector Search**: Find relevant CVs using semantic similarity
-- **Smart Filtering**: Filter by skills, location, experience, and more
-- **Clean UI**: Simple, intuitive interface built with Next.js and Tailwind
+- `backend/` — NestJS API (upload/search/CV endpoints)
+- `frontend/` — Next.js 14 App Router UI
 
-## Tech Stack
+## Prerequisites
 
-- **Frontend**: Next.js 14 + Tailwind CSS
-- **Backend**: NestJS
-- **Vector Database**: Pinecone
-- **AI Provider**: OpenAI
-- **File Storage**: Local uploads folder
-- **Development**: Local Node.js development
-
-## Quick Start
-
-### Prerequisites
-
-- Node.js 18+ 
-- npm or yarn
-- OpenAI API key
-- Pinecone API key
-
-### 1. Clone and Setup
-
-```bash
-git clone <your-repo>
-cd cv-search
-```
-
-### 2. Environment Configuration
-
-Copy the example environment file and fill in your API keys:
-
-```bash
-cp env.example .env
-```
-
-Edit `.env` with your actual API keys:
-
-```env
-# OpenAI
-OPENAI_API_KEY=your_openai_api_key_here
-
-# Pinecone
-PINECONE_API_KEY=your_pinecone_api_key_here
-PINECONE_ENVIRONMENT=your_pinecone_environment
-PINECONE_INDEX_NAME=cv-search-index
-
-# Backend
-BACKEND_PORT=3001
-FRONTEND_PORT=3000
-```
-
-### 3. Automated Setup (Recommended)
-
-```bash
-./setup.sh
-```
-
-This script will:
-- Check Node.js installation
-- Install all dependencies
-- Start both backend and frontend servers
-- Open the application in your browser
-
-### 4. Manual Setup (Alternative)
-
-#### Backend
-```bash
-cd backend
-npm install
-npm run start:dev
-```
-
-#### Frontend
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-The application will be available at:
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:3001
-
-## Usage
-
-### 1. Upload CVs
-
-- Navigate to the upload page
-- Drag and drop PDF files or click to select
-- CVs are automatically processed and indexed
-
-### 2. Search CVs
-
-- Use natural language queries like:
-  - "React developer in Toronto with 5+ years experience"
-  - "Python developer with machine learning skills"
-  - "Frontend developer in New York"
-
-### 3. Filter Results
-
-- Results are automatically filtered based on your query
-- View candidate details, skills, and experience
-- Download original CVs as needed
-
-## API Endpoints
-
-### CV Management
-- `POST /api/cv/upload` - Upload single CV
-- `POST /api/cv/upload-bulk` - Upload multiple CVs
-- `GET /api/cv/search` - Search CVs with query and filters
-
-### Health Check
-- `GET /api/health` - API health status
-
-## Project Structure
-
-```
-cv-search/
-├── frontend/                 # Next.js frontend application
-│   ├── components/          # React components
-│   ├── pages/              # Next.js pages
-│   └── styles/             # Tailwind CSS styles
-├── backend/                 # NestJS backend application
-│   ├── src/
-│   │   ├── cv/            # CV-related modules
-│   │   ├── upload/        # File upload handling
-│   │   └── search/        # Search and filtering logic
-│   └── uploads/           # Local CV storage
-├── setup.sh                # Automated setup script
-└── README.md              # This file
-```
+- Node.js 18+
+- npm
+- Supabase project (optional for minimal email persistence)
+- Google OAuth credentials (OAuth consent + Web app client)
 
 ## Environment Variables
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `OPENAI_API_KEY` | OpenAI API key for LLM operations | Yes |
-| `PINECONE_API_KEY` | Pinecone API key for vector database | Yes |
-| `PINECONE_ENVIRONMENT` | Pinecone environment (e.g., us-east1-aws) | Yes |
-| `PINECONE_INDEX_NAME` | Pinecone index name for CV storage | Yes |
-| `BACKEND_PORT` | Backend API port | No (default: 3001) |
-| `FRONTEND_PORT` | Frontend port | No (default: 3000) |
+Create `frontend/.env.local` with:
 
-## Example Search Queries
+```
+NEXTAUTH_URL=http://localhost:3000
+NEXTAUTH_SECRET=your-random-secret
 
-- "Software engineer with React and Node.js experience"
-- "Data scientist with Python and machine learning skills"
-- "Product manager in San Francisco with 3+ years experience"
-- "Frontend developer with TypeScript and CSS expertise"
-- "DevOps engineer with AWS and Docker experience"
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
 
-## Development
-
-### Running in Development Mode
-
-```bash
-# Terminal 1 - Backend
-cd backend
-npm run start:dev
-
-# Terminal 2 - Frontend
-cd frontend
-npm run dev
+# Optional, only if you enable minimal email persistence
+SUPABASE_URL=your-supabase-url
+SUPABASE_ANON_KEY=your-supabase-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 ```
 
-### Building for Production
+For the backend, copy `env.example` as needed and set your OpenAI/Pinecone keys.
 
-```bash
-# Backend
-cd backend
-npm run build
-npm run start:prod
+## Install & Run
 
-# Frontend
-cd frontend
-npm run build
-npm run start
+In two terminals:
+
+- Frontend
+  - `cd frontend`
+  - `npm install`
+  - `npm run dev`
+  - App runs at http://localhost:3000
+
+- Backend
+  - `cd backend`
+  - `npm install`
+  - `npm run start:dev`
+  - API runs at http://localhost:3001
+
+## Auth Model
+
+- NextAuth (Google provider) with JWT-only sessions (no DB adapter required)
+- Protected routes via middleware: `/search`, `/upload`
+- Landing page at `/` with CTA to sign in
+
+## Minimal Email Persistence (Optional)
+
+If you only want to store user emails in your DB while keeping JWT sessions on the frontend:
+
+1) Create the table in Supabase
+
+- Open Supabase SQL Editor and run:
+  - `frontend/supabase-users.sql`
+
+This creates `public.app_users (id, email, created_at)` and permissive RLS for quick start.
+
+2) API route (already included)
+
+- `frontend/app/api/user/upsert/route.ts` — upserts `{ email }` into `public.app_users` using the service role key.
+
+3) Automatic upsert after sign-in
+
+- `frontend/components/Providers.tsx` triggers a POST to `/api/user/upsert` once a session with `user.email` is available.
+
+4) Required env vars (frontend)
+
 ```
+SUPABASE_URL=...
+SUPABASE_ANON_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...
+```
+
+Note: Service role is used server-side only in the API route. Do not expose it in client code.
 
 ## Troubleshooting
 
-### Common Issues
+- "Cannot GET /api/auth/signin" — Ensure Next.js rewrites do not proxy `/api/auth/*` to the backend. See `frontend/next.config.js`.
+- Supabase errors (PGRST106) — With JWT-only auth, no adapter/DB is needed. The optional email upsert uses a simple table and service role via our API route.
+- Google OAuth errors — Verify redirect URIs include `http://localhost:3000/api/auth/callback/google`.
 
-1. **CV upload fails**: Check file format (PDF only) and file size
-2. **Search returns no results**: Verify OpenAI and Pinecone API keys
-3. **Port already in use**: Change ports in .env file or kill existing processes
+## Notes
 
-### Logs
-
-Check application logs in the terminal where you started each service:
-
-```bash
-# Backend logs
-cd backend && npm run start:dev
-
-# Frontend logs
-cd frontend && npm run dev
-```
-
-### Process Management
-
-```bash
-# Find running processes
-lsof -i :3000  # Frontend
-lsof -i :3001  # Backend
-
-# Kill processes
-kill -9 <PID>
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## License
-
-MIT License - see LICENSE file for details 
+- For full persistence (users/accounts/sessions), use Prisma + PostgreSQL later. For now, the JWT-only flow keeps auth simple and fast.
+- Frontend docs: see `frontend/README.md` for more detailed steps and screenshots. 
