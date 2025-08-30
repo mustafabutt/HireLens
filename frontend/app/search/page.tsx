@@ -17,11 +17,8 @@ export default function SearchPage() {
   const [currentFilters, setCurrentFilters] = useState<SearchFiltersType>({
     skills: [],
     location: '',
-    education: '',
     minExperience: 0,
     maxExperience: 20,
-    sortBy: 'relevance',
-    sortOrder: 'desc',
   });
 
   // Show loading state while checking authentication
@@ -58,12 +55,18 @@ export default function SearchPage() {
         query,
         ...(filters.skills.length > 0 && { skills: filters.skills }),
         ...(filters.location && { location: filters.location }),
-        ...(filters.education && { education: filters.education }),
         ...(filters.minExperience > 0 && { minExperience: filters.minExperience }),
         ...(filters.maxExperience < 20 && { maxExperience: filters.maxExperience }),
-        ...(filters.sortBy !== 'relevance' && { sortBy: filters.sortBy }),
-        ...(filters.sortOrder !== 'desc' && { sortOrder: filters.sortOrder }),
       };
+
+      // Debug logging
+      console.log('Search request:', searchRequest);
+      console.log('Filters being sent:', {
+        skills: filters.skills,
+        location: filters.location,
+        minExperience: filters.minExperience,
+        maxExperience: filters.maxExperience
+      });
 
       const response = await fetch('/api/search/cv', {
         method: 'POST',
@@ -94,11 +97,8 @@ export default function SearchPage() {
     setCurrentFilters({
       skills: [],
       location: '',
-      education: '',
       minExperience: 0,
       maxExperience: 20,
-      sortBy: 'relevance',
-      sortOrder: 'desc',
     });
   };
 
@@ -117,60 +117,60 @@ export default function SearchPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                HireLens
-              </h1>
-              <p className="text-lg text-gray-600">
-                AI-Powered CV Search & Candidate Discovery
-              </p>
+      <div className="sticky top-0 z-40 bg-white/80 backdrop-blur border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="h-16 flex items-center justify-between">
+            {/* Brand */}
+            <div className="flex items-center gap-3">
+              <a href="/search" className="inline-flex items-center">
+                <span className="text-2xl font-bold text-blue-600">HireLens</span>
+              </a>
+              <span className="hidden md:inline-block text-sm text-gray-500 border-l pl-3">
+                AI-Powered CV Search
+              </span>
             </div>
-            <div className="flex items-center space-x-4">
-              {/* User Info */}
+
+            {/* Center nav */}
+            <div className="hidden md:flex items-center">
+              <a
+                href="/"
+                className="inline-flex items-center text-sm font-medium text-gray-600 hover:text-gray-900"
+              >
+                <span className="mr-1">←</span> Back to landing
+              </a>
+            </div>
+
+            {/* Actions + user */}
+            <div className="flex items-center gap-3">
+              <a
+                href="/upload"
+                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
+              >
+                Upload CVs
+              </a>
+              <button
+                onClick={handleSignOut}
+                className="inline-flex items-center rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+              >
+                Sign out
+              </button>
               {session?.user && (
-                <div className="flex items-center space-x-3">
-                  <div className="text-right">
-                    <p className="text-sm font-medium text-gray-900">
-                      {session.user.name}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {session.user.email}
-                    </p>
-                  </div>
-                  {session.user.image && (
+                <div className="hidden sm:flex items-center gap-2 pl-2 ml-1 border-l">
+                  {session.user.image ? (
                     <img
                       className="h-8 w-8 rounded-full"
                       src={session.user.image}
                       alt={session.user.name || 'User'}
                     />
+                  ) : (
+                    <div className="h-8 w-8 rounded-full bg-gray-200" />
                   )}
+                  <div className="leading-tight">
+                    <p className="text-xs font-medium text-gray-900 truncate max-w-[140px]">{session.user.name}</p>
+                    <p className="text-[10px] text-gray-500 truncate max-w-[140px]">{session.user.email}</p>
+                  </div>
                 </div>
               )}
-              
-              {/* Navigation */}
-              <div className="flex items-center space-x-3">
-                <a
-                  href="/upload"
-                  className="text-blue-600 hover:text-blue-800 font-medium text-sm"
-                >
-                  Upload CVs
-                </a>
-                <button
-                  onClick={handleSignOut}
-                  className="text-gray-600 hover:text-gray-800 font-medium text-sm"
-                >
-                  Sign Out
-                </button>
-                <a
-                  href="/"
-                  className="text-gray-500 hover:text-gray-700 text-sm"
-                >
-                  ← Back to Landing
-                </a>
-              </div>
             </div>
           </div>
         </div>

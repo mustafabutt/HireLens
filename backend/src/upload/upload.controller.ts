@@ -87,10 +87,7 @@ export class UploadController {
         const { data: pub } = supabase.storage.from(bucket).getPublicUrl(objectPath);
         const publicUrl = pub?.publicUrl;
 
-        // 5) Persist mapping/public URL in index metadata (if supported) and local map fallback
-        if (publicUrl) {
-          await this.cvService.updateStoredFileUrl(cvEntity.id, publicUrl);
-        }
+        // 5) Save public URL to local file mapping for fallback
         await this.cvService.saveFileMapping(cvEntity.id, publicUrl || tempPath);
 
         const response: CvUploadResponseDto = {

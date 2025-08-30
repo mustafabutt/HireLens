@@ -5,11 +5,8 @@ import React, { useState } from 'react';
 export interface SearchFilters {
   skills: string[];
   location: string;
-  education: string;
   minExperience: number;
   maxExperience: number;
-  sortBy: 'relevance' | 'experience' | 'uploadDate';
-  sortOrder: 'asc' | 'desc';
 }
 
 interface SearchFiltersProps {
@@ -21,11 +18,8 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({ onFiltersChange, onClearF
   const [filters, setFilters] = useState<SearchFilters>({
     skills: [],
     location: '',
-    education: '',
     minExperience: 0,
     maxExperience: 20,
-    sortBy: 'relevance',
-    sortOrder: 'desc',
   });
 
   // Predefined options for dropdowns
@@ -41,10 +35,7 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({ onFiltersChange, onClearF
     'Sialkot', 'Gujranwala', 'Peshawar', 'Quetta', 'Remote', 'Hybrid'
   ];
 
-  const educationOptions = [
-    'High School', 'Diploma', 'Associate Degree', 'Bachelor\'s Degree',
-    'Master\'s Degree', 'PhD', 'Certification', 'Bootcamp'
-  ];
+
 
   const experienceOptions = Array.from({ length: 21 }, (_, i) => i);
 
@@ -65,11 +56,8 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({ onFiltersChange, onClearF
     const clearedFilters: SearchFilters = {
       skills: [],
       location: '',
-      education: '',
       minExperience: 0,
       maxExperience: 20,
-      sortBy: 'relevance',
-      sortOrder: 'desc',
     };
     setFilters(clearedFilters);
     onClearFilters();
@@ -77,7 +65,6 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({ onFiltersChange, onClearF
 
   const hasActiveFilters = filters.skills.length > 0 || 
                           filters.location || 
-                          filters.education || 
                           filters.minExperience > 0 || 
                           filters.maxExperience < 20;
 
@@ -111,11 +98,7 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({ onFiltersChange, onClearF
                 Location: {filters.location}
               </span>
             )}
-            {filters.education && (
-              <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
-                Education: {filters.education}
-              </span>
-            )}
+
             {(filters.minExperience > 0 || filters.maxExperience < 20) && (
               <span className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
                 Experience: {filters.minExperience}-{filters.maxExperience} years
@@ -164,22 +147,7 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({ onFiltersChange, onClearF
           </select>
         </div>
 
-        {/* Education Filter */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Education Level
-          </label>
-          <select
-            value={filters.education}
-            onChange={(e) => handleFilterChange('education', e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="">Any Education</option>
-            {educationOptions.map(education => (
-              <option key={education} value={education}>{education}</option>
-            ))}
-          </select>
-        </div>
+
 
         {/* Experience Range Filter */}
         <div>
@@ -214,31 +182,7 @@ const SearchFilters: React.FC<SearchFiltersProps> = ({ onFiltersChange, onClearF
           </div>
         </div>
 
-        {/* Sort Options */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Sort By
-          </label>
-          <div className="space-y-2">
-            <select
-              value={filters.sortBy}
-              onChange={(e) => handleFilterChange('sortBy', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="relevance">Relevance</option>
-              <option value="experience">Experience</option>
-              <option value="uploadDate">Upload Date</option>
-            </select>
-            <select
-              value={filters.sortOrder}
-              onChange={(e) => handleFilterChange('sortOrder', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="desc">Descending</option>
-              <option value="asc">Ascending</option>
-            </select>
-          </div>
-        </div>
+
       </div>
     </div>
   );

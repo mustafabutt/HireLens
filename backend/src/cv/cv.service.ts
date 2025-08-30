@@ -340,53 +340,66 @@ export class CvService {
         ...(filters?.skills || []).map((s: string) => s.toLowerCase())
       ];
       
+      // Handle frontend filters - these take priority over extracted terms
       const finalLocation = filters?.location || extractedLocation;
       const finalLocationNormalized = finalLocation ? this.normalizeLocation(finalLocation) : extractedLocationNormalized;
       
       const finalEducation = filters?.education || extractedEducation;
       
+      // Debug: Log what we received from frontend
+      this.logger.debug(`Frontend filters received:`, {
+        skills: filters?.skills,
+        location: filters?.location,
+        education: filters?.education,
+        minExperience: filters?.minExperience,
+        maxExperience: filters?.maxExperience
+      });
+      
+      // Determine if we should enforce strict filtering based on query content
+      const hasSkillTerms = combinedSkillIds.length > 0;
+      const hasLocationTerms = !!finalLocation;
+      const hasEducationTerms = !!finalEducation;
+      const isGeneralQuery = !hasSkillTerms && !hasLocationTerms && !hasEducationTerms;
+
       // Debug logging
       this.logger.debug(`Search filters received: ${JSON.stringify(filters)}`);
       this.logger.debug(`Final location: "${finalLocation}", normalized: "${finalLocationNormalized}"`);
       this.logger.debug(`Combined skill IDs: ${JSON.stringify(combinedSkillIds)}`);
       this.logger.debug(`Final education: "${finalEducation}"`);
-      
-      // Determine if we should enforce strict filtering based on query content
-      const hasSkillTerms = combinedSkillIds.length > 0;
-      const hasLocationTerms = !!finalLocationNormalized;
-      const hasEducationTerms = !!finalEducation;
-      const isGeneralQuery = !hasSkillTerms && !hasLocationTerms && !hasEducationTerms;
+      this.logger.debug(`Has location terms: ${hasLocationTerms}, Has education terms: ${hasEducationTerms}`);
 
       // Build Pinecone query with appropriate filters
+      // Note: We'll be less restrictive with Pinecone filters and rely on post-processing
       const combinedFilters = {
         ...(filters || {}),
-        ...(hasSkillTerms ? { skillIds: combinedSkillIds } : {}),
-        ...(hasLocationTerms ? { locationNormalized: finalLocationNormalized } : {}),
-        ...(hasEducationTerms ? { education: finalEducation } : {}),
+        // Only apply experience filtering at Pinecone level
+        // Location and skills will be handled in post-processing for better flexibility
         ...(filters?.minExperience && { minExperience: filters.minExperience }),
         ...(filters?.maxExperience && { maxExperience: filters.maxExperience }),
       };
       
-      // Add strict location filtering at Pinecone level if location is specified
-      if (hasLocationTerms && finalLocationNormalized) {
-        combinedFilters.locationNormalized = finalLocationNormalized;
-        this.logger.debug(`Adding strict Pinecone location filter: ${finalLocationNormalized}`);
+      // Debug: Don't add Pinecone location filtering since CVs don't have locationNormalized field
+      if (hasLocationTerms) {
+        this.logger.debug(`Location filtering will be done in post-processing: "${finalLocation}"`);
       }
       const builtFilter = this.buildPineconeFilter(combinedFilters);
       
       this.logger.debug(`Built Pinecone filter: ${JSON.stringify(builtFilter)}`);
       
+      // SINGLE Pinecone query with higher topK to get more candidates
       const queryRequest: any = {
         vector: queryEmbedding,
-        topK: 20,
+        topK: 100, // Increased to get more candidates for post-filtering
         includeMetadata: true,
       };
       if (builtFilter) {
         queryRequest.filter = builtFilter;
       }
 
-      // Primary search
-      let searchResponse = await this.pineconeIndex.query(queryRequest);
+      this.logger.debug(`Executing single Pinecone query with topK: ${queryRequest.topK}`);
+      
+      // Execute single query
+      const searchResponse = await this.pineconeIndex.query(queryRequest);
       let results = (searchResponse.matches || []);
       
       this.logger.debug(`Pinecone returned ${results.length} results before post-filtering`);
@@ -396,6 +409,7 @@ export class CvService {
 
       // Apply post-filtering based on query intent
       if (hasSkillTerms) {
+        this.logger.debug(`Starting skill filtering with ${results.length} results. Skills to match: ${JSON.stringify(combinedSkillIds)}`);
         results = results.filter(match => {
           const skillsMeta: unknown = match.metadata?.skills;
           const skillsNorm: unknown = match.metadata?.skillsNormalized;
@@ -405,70 +419,105 @@ export class CvService {
           const skillsLower = skillsArray.map(s => (typeof s === 'string' ? s.toLowerCase() : ''));
           const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
 
-          // Check if ANY of the extracted skills are present
-          return combinedSkillIds.some(skillId => {
+          // Check if ANY of the extracted skills are present (case-insensitive)
+          const skillMatch = combinedSkillIds.some(skillId => {
             const s = skillId.toLowerCase();
-            if (normArray.includes(s)) return true;
-            if (skillsLower.includes(s)) return true;
-            if (fullTextLower.includes(s)) return true;
+            
+            // Check normalized skills array
+            if (normArray.includes(s)) {
+              this.logger.debug(`Skill "${s}" matched in normalized skills array`);
+              return true;
+            }
+            
+            // Check original skills array (case-insensitive)
+            if (skillsLower.includes(s)) {
+              this.logger.debug(`Skill "${s}" matched in original skills array`);
+              return true;
+            }
+            
+            // Check full text (case-insensitive)
+            if (fullTextLower.includes(s)) {
+              this.logger.debug(`Skill "${s}" matched in full text`);
+              return true;
+            }
+            
+            // Check skill variants (case-insensitive)
             const skillVariants = this.getSkillVariants(s);
-            return skillVariants.some(v => fullTextLower.includes(v));
+            if (skillVariants.some(v => fullTextLower.includes(v.toLowerCase()))) {
+              this.logger.debug(`Skill "${s}" matched via skill variants`);
+              return true;
+            }
+            
+            // Additional check: if the skill is a single word, check if it appears as a standalone word in text
+            if (s.length > 2 && !s.includes(' ')) {
+              const wordBoundaryRegex = new RegExp(`\\b${s}\\b`, 'i');
+              if (wordBoundaryRegex.test(fullTextLower)) {
+                this.logger.debug(`Skill "${s}" matched via word boundary regex`);
+                return true;
+              }
+            }
+            
+            return false;
           });
+          
+          if (!skillMatch) {
+            this.logger.debug(`CV ${match.metadata?.filename || match.id} filtered out - no skills matched`);
+          }
+          
+          return skillMatch;
         });
+        this.logger.debug(`After skill filtering: ${results.length} results`);
       }
 
       if (hasLocationTerms) {
-        this.logger.debug(`Starting location filtering with ${results.length} results. Query location: "${finalLocationNormalized}"`);
-        this.logger.debug(`Results before location filtering: ${results.map(r => `${r.id}: location="${r.metadata?.location}", normalized="${r.metadata?.locationNormalized}"`).join(', ')}`);
+        this.logger.debug(`Starting location filtering with ${results.length} results. Query location: "${finalLocation}"`);
+        this.logger.debug(`Location filter details: finalLocation="${finalLocation}", finalLocationNormalized="${finalLocationNormalized}"`);
         results = results.filter(match => {
           const loc: string | undefined = match.metadata?.location;
-          const locNorm: string | undefined = match.metadata?.locationNormalized;
-          const fullText: string | undefined = match.metadata?.fullText;
           const locLower = typeof loc === 'string' ? loc.toLowerCase() : '';
-          const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
-          const qLoc = finalLocationNormalized!.toLowerCase();
+          const qLoc = finalLocation!.toLowerCase();
+          const qLocNorm = finalLocationNormalized!.toLowerCase();
           
-          this.logger.debug(`Location filtering CV ${match.id}: location="${loc}", normalized="${locNorm}", query location="${qLoc}"`);
-          
-          // SMART location matching - exact matches OR city name contained in location
+          // PRECISE location matching - only use reliable strategies
           let hasLocation = false;
           
-          // First priority: exact match in locationNormalized field
-          if (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) {
+          // Strategy 1: exact match in location field (case-insensitive)
+          if (locLower === qLoc) {
             hasLocation = true;
-            this.logger.debug(`Exact location match in normalized field: "${qLoc}" === "${locNorm}"`);
+            this.logger.debug(`Exact location match: "${loc}" = "${finalLocation}"`);
           }
-          // Second priority: exact match in location field
-          else if (locLower === qLoc) {
-            hasLocation = true;
-            this.logger.debug(`Exact location match in location field: "${qLoc}" === "${locLower}"`);
-          }
-          // Third priority: city name is contained in the location (e.g., "sialkot" in "sialkot, pakistan")
-          else if (typeof locNorm === 'string' && locNorm.toLowerCase().includes(qLoc)) {
-            hasLocation = true;
-            this.logger.debug(`City name "${qLoc}" found in location "${locNorm}"`);
-          }
+          // Strategy 2: query location is the primary city in stored location (e.g., "karachi" in "Karāchi, Sindh, Pakistan")
           else if (locLower.includes(qLoc)) {
-            hasLocation = true;
-            this.logger.debug(`City name "${qLoc}" found in location "${locLower}"`);
+            // Only accept if the query location appears as a standalone word or city name
+            // This prevents false positives like "lahore" matching "sialkot pakistan"
+            const words = locLower.split(/[,\s]+/);
+            if (words.includes(qLoc) || words.some(word => word.startsWith(qLoc))) {
+              hasLocation = true;
+              this.logger.debug(`Location contains query as city: "${loc}" contains "${finalLocation}"`);
+            }
           }
-          // No match found
-          else {
-            this.logger.debug(`Location "${qLoc}" not found in CV location "${loc}" or normalized "${locNorm}"`);
+          // Strategy 3: normalized location matching (if available)
+          else if (finalLocationNormalized && locLower.includes(qLocNorm)) {
+            // Same word boundary check for normalized locations
+            const words = locLower.split(/[,\s]+/);
+            if (words.includes(qLocNorm) || words.some(word => word.startsWith(qLocNorm))) {
+              hasLocation = true;
+              this.logger.debug(`Normalized location match: "${loc}" contains "${finalLocationNormalized}"`);
+            }
           }
           
-          if (hasLocation) {
-            this.logger.debug(`Location "${qLoc}" found in CV ${match.id}`);
-          } else {
-            this.logger.debug(`CV ${match.id} filtered out - no matching location`);
+          if (!hasLocation) {
+            this.logger.debug(`CV ${match.metadata?.filename || match.id} filtered out - location "${loc}" doesn't match "${finalLocation}"`);
           }
           
           return hasLocation;
         });
+        this.logger.debug(`After location filtering: ${results.length} results`);
       }
 
       if (hasEducationTerms) {
         this.logger.debug(`Starting education filtering with ${results.length} results. Query education: "${finalEducation}"`);
+        this.logger.debug(`Education filter details: finalEducation="${finalEducation}"`);
         results = results.filter(match => {
           const education: string | undefined = match.metadata?.education;
           const fullText: string | undefined = match.metadata?.fullText;
@@ -476,30 +525,24 @@ export class CvService {
           const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
           const qEdu = finalEducation!.toLowerCase();
           
-          this.logger.debug(`Education filtering CV ${match.id}: education="${education}", query education="${qEdu}"`);
-          
           // SMART education matching - multiple strategies
           let hasEducation = false;
           
           // Strategy 1: Exact match in education field
           if (eduLower === qEdu) {
             hasEducation = true;
-            this.logger.debug(`Exact education match: "${qEdu}" === "${eduLower}"`);
           }
           // Strategy 2: Query education contained in stored education
           else if (eduLower.includes(qEdu)) {
             hasEducation = true;
-            this.logger.debug(`Education field contains query: "${qEdu}" in "${eduLower}"`);
           }
           // Strategy 3: Stored education contained in query education
           else if (qEdu.includes(eduLower) && eduLower.length > 5) {
             hasEducation = true;
-            this.logger.debug(`Query contains education field: "${eduLower}" in "${qEdu}"`);
           }
           // Strategy 4: Query education appears in fullText
           else if (fullTextLower.includes(qEdu)) {
             hasEducation = true;
-            this.logger.debug(`Education found in fullText: "${qEdu}" in fullText`);
           }
           // Strategy 5: Partial word matching (e.g., "information technology" in "Bachelor of Science Information Technology")
           else {
@@ -513,28 +556,51 @@ export class CvService {
             
             if (matchingWords.length >= Math.max(1, queryWords.length * 0.6)) {
               hasEducation = true;
-              this.logger.debug(`Partial education match: ${matchingWords.length}/${queryWords.length} words matched`);
             }
-          }
-          
-          if (hasEducation) {
-            this.logger.debug(`Education "${qEdu}" found in CV ${match.id}`);
-          } else {
-            this.logger.debug(`CV ${match.id} filtered out - no matching education`);
           }
           
           return hasEducation;
         });
+        this.logger.debug(`After education filtering: ${results.length} results`);
       }
 
-      // Apply similarity threshold (more reasonable)
+      // Apply similarity threshold - more flexible for skill-based searches and location filtering
+      const similarityThreshold = hasSkillTerms ? 0.01 : (hasLocationTerms ? 0.05 : 0.3); // Lower threshold when skills or location are specified
       results = results.filter(match => 
-        typeof match.score === 'number' ? match.score >= 0.3 : true
+        typeof match.score === 'number' ? match.score >= similarityThreshold : true
       );
+      this.logger.debug(`After similarity threshold (${similarityThreshold}): ${results.length} results`);
+
+      // CRITICAL: Remove duplicates by CV ID and content similarity
+      const seenIds = new Set<string>();
+      const seenContentHashes = new Set<string>();
+      const uniqueResults = results.filter(match => {
+        // First check for duplicate IDs
+        if (seenIds.has(match.id)) {
+          this.logger.debug(`Removing duplicate CV ID: ${match.id}`);
+          return false;
+        }
+        
+        // Then check for duplicate content (filename + first 100 chars)
+        const metadata = match.metadata || {};
+        const filename = metadata.filename || 'unknown';
+        const fullText = metadata.fullText || '';
+        const contentHash = `${filename.toLowerCase()}_${fullText.substring(0, 100).toLowerCase()}`;
+        
+        if (seenContentHashes.has(contentHash)) {
+          this.logger.debug(`Removing duplicate CV content: ${filename} (ID: ${match.id})`);
+          return false;
+        }
+        
+        seenIds.add(match.id);
+        seenContentHashes.add(contentHash);
+        return true;
+      });
+      this.logger.debug(`After deduplication: ${uniqueResults.length} unique results`);
 
       // Apply sorting if specified
       if (filters?.sortBy && filters.sortBy !== 'relevance') {
-        results.sort((a, b) => {
+        uniqueResults.sort((a, b) => {
           let aValue: any, bValue: any;
           
           switch (filters.sortBy) {
@@ -558,152 +624,8 @@ export class CvService {
         });
       }
 
-      // If no results and we had strict filtering, try a more lenient search
-      if (results.length === 0 && (hasSkillTerms || hasLocationTerms || hasEducationTerms)) {
-        this.logger.debug(`No results found with strict filtering, trying fallback search`);
-        const fallbackRequest: any = {
-          vector: queryEmbedding,
-          topK: 30,
-          includeMetadata: true,
-        };
-        const fallbackResponse = await this.pineconeIndex.query(fallbackRequest);
-        const fallbackResults = (fallbackResponse.matches || [])
-          .filter(match => typeof match.score === 'number' ? match.score >= 0.2 : true);
-        
-        this.logger.debug(`Fallback search returned ${fallbackResults.length} results`);
-        if (fallbackResults.length > 0) {
-          this.logger.debug(`Fallback result metadata: ${JSON.stringify(fallbackResults[0].metadata)}`);
-        }
-
-        // Apply softer filtering for fallback, but ALWAYS apply location filtering if location terms exist
-        if (hasSkillTerms) {
-          results = fallbackResults.filter(match => {
-            const fullText: string | undefined = match.metadata?.fullText;
-            const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
-            
-            return combinedSkillIds.some(skillId => {
-              const s = skillId.toLowerCase();
-              if (fullTextLower.includes(s)) return true;
-              const skillVariants = this.getSkillVariants(s);
-              return skillVariants.some(v => fullTextLower.includes(v));
-            });
-          });
-        } else {
-          results = fallbackResults;
-        }
-
-        // IMPORTANT: Always apply location filtering in fallback if location terms exist
-        if (hasLocationTerms) {
-          this.logger.debug(`Applying location filtering to fallback results`);
-          results = results.filter(match => {
-            const loc: string | undefined = match.metadata?.location;
-            const locNorm: string | undefined = match.metadata?.locationNormalized;
-            const fullText: string | undefined = match.metadata?.fullText;
-            const locLower = typeof loc === 'string' ? loc.toLowerCase() : '';
-            const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
-            const qLoc = finalLocationNormalized!.toLowerCase();
-            
-            this.logger.debug(`Fallback location filtering CV ${match.id}: location="${loc}", normalized="${locNorm}", query location="${qLoc}"`);
-            
-            // SMART location matching in fallback too - exact matches OR city name contained in location
-            let hasLocation = false;
-            
-            // First priority: exact match in locationNormalized field
-            if (typeof locNorm === 'string' && locNorm.toLowerCase() === qLoc) {
-              hasLocation = true;
-              this.logger.debug(`Fallback: Exact location match in normalized field: "${qLoc}" === "${locNorm}"`);
-            }
-            // Second priority: exact match in location field
-            else if (locLower === qLoc) {
-              hasLocation = true;
-              this.logger.debug(`Fallback: Exact location match in location field: "${qLoc}" === "${locLower}"`);
-            }
-            // Third priority: city name is contained in the location (e.g., "sialkot" in "sialkot, pakistan")
-            else if (typeof locNorm === 'string' && locNorm.toLowerCase().includes(qLoc)) {
-              hasLocation = true;
-              this.logger.debug(`Fallback: City name "${qLoc}" found in location "${locNorm}"`);
-            }
-            else if (locLower.includes(qLoc)) {
-              hasLocation = true;
-              this.logger.debug(`Fallback: City name "${qLoc}" found in location "${locLower}"`);
-            }
-            // No match found
-            else {
-              this.logger.debug(`Fallback: Location "${qLoc}" not found in CV location "${loc}" or normalized "${locNorm}"`);
-            }
-            
-            if (!hasLocation) {
-              this.logger.debug(`CV ${match.id} filtered out in fallback - no matching location`);
-            }
-            
-            return hasLocation;
-          });
-        }
-
-        // IMPORTANT: Always apply education filtering in fallback if education terms exist
-        if (hasEducationTerms) {
-          this.logger.debug(`Applying education filtering to fallback results`);
-          this.logger.debug(`Education filter criteria: "${finalEducation}"`);
-          results = results.filter(match => {
-            const education: string | undefined = match.metadata?.education;
-            const fullText: string | undefined = match.metadata?.fullText;
-            const eduLower = typeof education === 'string' ? education.toLowerCase() : '';
-            const fullTextLower = typeof fullText === 'string' ? fullText.toLowerCase() : '';
-            const qEdu = finalEducation!.toLowerCase();
-            
-            this.logger.debug(`Fallback education filtering CV ${match.id}: education="${education}", query education="${qEdu}"`);
-            
-            // SMART education matching in fallback too - same strategies as primary filtering
-            let hasEducation = false;
-            
-            // Strategy 1: Exact match in education field
-            if (eduLower === qEdu) {
-              hasEducation = true;
-              this.logger.debug(`Fallback: Exact education match: "${qEdu}" === "${eduLower}"`);
-            }
-            // Strategy 2: Query education contained in stored education
-            else if (eduLower.includes(qEdu)) {
-              hasEducation = true;
-              this.logger.debug(`Fallback: Education field contains query: "${qEdu}" in "${eduLower}"`);
-            }
-            // Strategy 3: Stored education contained in query education
-            else if (qEdu.includes(eduLower) && eduLower.length > 5) {
-              hasEducation = true;
-              this.logger.debug(`Fallback: Query contains education field: "${eduLower}" in "${qEdu}"`);
-            }
-            // Strategy 4: Query education appears in fullText
-            else if (fullTextLower.includes(qEdu)) {
-              hasEducation = true;
-              this.logger.debug(`Fallback: Education found in fullText: "${qEdu}" in fullText`);
-            }
-            // Strategy 5: Partial word matching
-            else {
-              const queryWords = qEdu.split(/\s+/).filter(word => word.length > 2);
-              const educationWords = eduLower.split(/\s+/).filter(word => word.length > 2);
-              
-              const matchingWords = queryWords.filter(word => 
-                educationWords.some(eduWord => eduWord.includes(word) || word.includes(eduWord))
-              );
-              
-              if (matchingWords.length >= Math.max(1, queryWords.length * 0.6)) {
-                hasEducation = true;
-                this.logger.debug(`Fallback: Partial education match: ${matchingWords.length}/${queryWords.length} words matched`);
-              }
-            }
-            
-            if (!hasEducation) {
-              this.logger.debug(`CV ${match.id} filtered out in fallback - no matching education`);
-            } else {
-              this.logger.debug(`CV ${match.id} passes education filter`);
-            }
-            
-            return hasEducation;
-          });
-        }
-      }
-
       // Format results
-      const formattedResults = results.map(match => {
+      const formattedResults = uniqueResults.map(match => {
         const metadata: any = {};
         if (match.metadata?.fullName) metadata.fullName = match.metadata.fullName;
         if (match.metadata?.email) metadata.email = match.metadata.email;
@@ -725,15 +647,8 @@ export class CvService {
         };
       });
 
-      // Remove duplicates based on CV ID
-      const uniqueResults = formattedResults.filter((result, index, self) => 
-        index === self.findIndex(r => r.id === result.id)
-      );
-
-      this.logger.debug(`Removed ${formattedResults.length - uniqueResults.length} duplicate results`);
-      this.logger.debug(`Final results count: ${uniqueResults.length}`);
-
-      return uniqueResults;
+      this.logger.debug(`Final formatted results count: ${formattedResults.length}`);
+      return formattedResults;
 
     } catch (error) {
       this.logger.error('Error searching CVs:', error);
@@ -749,13 +664,8 @@ export class CvService {
 
     const filter: any = {};
 
-    // Add location filter if specified
-    if (filters.location) {
-      filter.location = { $eq: filters.location };
-    }
-    if (filters.locationNormalized) {
-      filter.locationNormalized = { $eq: filters.locationNormalized };
-    }
+    // Note: Location filtering is handled in post-processing for better flexibility
+    // Pinecone filter is too strict for location matching
 
     // Note: Education filtering is handled in post-processing for better flexibility
     // Pinecone filter is too strict for education matching
@@ -929,12 +839,12 @@ export class CvService {
     const q = (query || '').toLowerCase();
     const catalog: Record<string, string[]> = {
       // Programming Languages
-      python: ['python', 'py'],
-      javascript: ['javascript', 'js', 'ecmascript'],
-      typescript: ['typescript', 'ts'],
-      java: ['java', 'j2ee', 'j2se'],
-      'c#': ['c#', 'csharp', 'dotnet', '.net'],
-      'c++': ['c++', 'cpp', 'c plus plus'],
+      python: ['python', 'py', 'Python', 'PY'],
+      javascript: ['javascript', 'js', 'ecmascript', 'JavaScript', 'JS', 'ECMAScript'],
+      typescript: ['typescript', 'ts', 'TypeScript', 'TS'],
+      java: ['java', 'j2ee', 'j2se', 'Java', 'J2EE', 'J2SE'],
+      'c#': ['c#', 'csharp', 'dotnet', '.net', 'C#', 'CSharp', 'DotNet', '.NET'],
+      'c++': ['c++', 'cpp', 'c plus plus', 'C++', 'CPP', 'C Plus Plus'],
       c: ['c programming', 'c language'],
       go: ['go', 'golang'],
       rust: ['rust'],
@@ -949,19 +859,19 @@ export class CvService {
       julia: ['julia'],
       
       // Web Technologies
-      html: ['html', 'html5', 'hypertext markup language'],
-      css: ['css', 'css3', 'cascading style sheets'],
-      'node.js': ['node.js', 'nodejs', 'node js', 'node'],
-      react: ['react', 'reactjs', 'react.js', 'react native'],
-      angular: ['angular', 'angularjs', 'angular.js'],
-      vue: ['vue', 'vue.js', 'vuejs'],
-      svelte: ['svelte'],
-      next: ['next.js', 'nextjs'],
-      nuxt: ['nuxt.js', 'nuxtjs'],
-      express: ['express', 'express.js', 'expressjs'],
-      fastify: ['fastify'],
-      koa: ['koa'],
-      hapi: ['hapi'],
+      html: ['html', 'html5', 'hypertext markup language', 'HTML', 'HTML5', 'HyperText Markup Language'],
+      css: ['css', 'css3', 'cascading style sheets', 'CSS', 'CSS3', 'Cascading Style Sheets'],
+      'node.js': ['node.js', 'nodejs', 'node js', 'node', 'Node.js', 'NodeJS', 'Node JS', 'Node'],
+      react: ['react', 'reactjs', 'react.js', 'react native', 'React', 'ReactJS', 'React.js', 'React Native'],
+      angular: ['angular', 'angularjs', 'angular.js', 'Angular', 'AngularJS', 'Angular.js'],
+      vue: ['vue', 'vue.js', 'vuejs', 'Vue', 'Vue.js', 'VueJS'],
+      svelte: ['svelte', 'Svelte'],
+      next: ['next.js', 'nextjs', 'Next.js', 'NextJS', 'Next'],
+      nuxt: ['nuxt.js', 'nuxtjs', 'Nuxt.js', 'NuxtJS', 'Nuxt'],
+      express: ['express', 'express.js', 'expressjs', 'Express', 'Express.js', 'ExpressJS'],
+      fastify: ['fastify', 'Fastify'],
+      koa: ['koa', 'Koa'],
+      hapi: ['hapi', 'Hapi'],
       
       // Backend Frameworks
       django: ['django', 'django framework'],
@@ -1071,7 +981,8 @@ export class CvService {
     const found: string[] = [];
     for (const canonical of Object.keys(catalog)) {
       const variants = catalog[canonical];
-      if (variants.some(v => q.includes(v))) {
+      // Case-insensitive matching for all variants
+      if (variants.some(v => q.includes(v.toLowerCase()))) {
         // Use canonical lowercase id for normalized matching
         found.push(canonical.toLowerCase());
         this.logger.debug(`Extracted skill: ${canonical} from query: "${q}"`);
@@ -1086,7 +997,7 @@ export class CvService {
 
   private normalizeSkill(skill: string): string {
     const s = (skill || '').toLowerCase().trim();
-    // Map common variants to canonical IDs
+    // Map common variants to canonical IDs (case-insensitive)
     const map: Record<string, string> = {
       // Programming Languages
       'node js': 'node.js',
@@ -1095,6 +1006,10 @@ export class CvService {
       'reactjs': 'react',
       'react.js': 'react',
       'react native': 'react',
+      'React': 'react',
+      'ReactJS': 'react',
+      'React.js': 'react',
+      'React Native': 'react',
       'ts': 'typescript',
       'js': 'javascript',
       'ecmascript': 'javascript',
